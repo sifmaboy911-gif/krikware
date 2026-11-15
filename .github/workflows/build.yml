@@ -1,4 +1,4 @@
-name: Build Cheat from ZIP
+name: Build ASTRA
 
 on:
   push:
@@ -19,40 +19,44 @@ jobs:
         ndk-version: r27c
         add-to-path: true
 
-    - name: Patch and Build
+    - name: Unzip Source
       run: |
+        # Ищем zip-файл в репозитории
         ZIP_FILE=$(find . -name "*.zip" | head -n 1)
         if [ -z "$ZIP_FILE" ]; then
-          echo "ОШИБКА: zip не найден!"
+          echo "ОШИБКА: Zip-архив не найден в репозитории!"
           exit 1
         fi
         echo "Распаковываю $ZIP_FILE..."
         unzip -q "$ZIP_FILE"
-        
-        ENTRY_FILE=$(find . -name "entry.cpp" | head -n 1)
-        if [ -n "$ENTRY_FILE" ]; then
-          echo "" >> "$ENTRY_FILE"
-          echo 'extern "C" __attribute__((visibility("default"))) void _() {}' >> "$ENTRY_FILE"
-          echo "Патч применен."
-        fi
-        
-        BUILD_SCRIPT=$(find . -name "build.sh" | head -n 1)
-        if [ -z "$BUILD_SCRIPT" ]; then
-          echo "ОШИБКА: build.sh не найден!"
+
+    - name: Build with NDK
+      run: |
+        # Ищем папку, где лежит jni/Android.mk (это корень проекта)
+        ANDROID_MK=$(find . -name "Android.mk" | grep "jni/Android.mk" | head -n 1)
+        if [ -z "$ANDROID_MK" ]; then
+          echo "ОШИБКА: jni/Android.mk не найден!"
           exit 1
         fi
         
-        DIR=$(dirname "$BUILD_SCRIPT")
-        cd "$DIR"
+        # Переходим в корень проекта (на уровень выше папки jni)
+        PROJECT_DIR=$(dirname $(dirname "$ANDROID_MK"))
+        cd "$PROJECT_DIR"
+        echo "Собираю в папке: $PROJECT_DIR"
         
-        chmod +x build.sh
-        chmod +x scripts/build.sh || true
-        
-        export ANDROID_NDK_HOME=$ANDROID_NDK_HOME
-        ./build.sh
+        # Патчим entry.cpp для совместимости с инжектором
+        ENTRY_FILE=$(find . -name "entry.cpp" | head -n 1)
+        if [ -n "$ENTRY_FILE" ]; then
+          echo 'extern "C" __attribute__((visibility("default"))) void _() {}' >> "$ENTRY_FILE"
+          echo "Патч экспорта _ применен к $ENTRY_FILE"
+        fi
+
+        # Запускаем сборку напрямую через ndk-build, как просил автор в README
+        $ANDROID_NDK_HOME/ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk NDK_APPLICATION_MK=jni/Application.mk APP_SUPPORT_FLEXIBLE_PAGE_SIZES=true -j4
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: cheat-lib
-        path: "**/out/arm64-v8a/*.so"
+        name: astra-lib
+        # Забираем все собранные .so файлы из папки libs
+        path: "**/libs/arm64-v8a/*.so"
