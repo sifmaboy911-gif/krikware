@@ -1,0 +1,57 @@
+name: Build Cheat from ZIP
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Unzip Source
+      run: |
+        # Находим zip файл в репозитории и распаковываем его
+        ZIP_FILE=$(find . -name "*.zip" | head -n 1)
+        echo "Распаковываю $ZIP_FILE..."
+        unzip "$ZIP_FILE"
+        
+        # Смотрим, что распаковалось (чтобы понять, в какой папке лежат исходники)
+        ls -la
+
+    # Если внутри zip-а есть папка (например, forgpt), переходим в неё.
+    # Если файлы в корне — этот шаг не повредит.
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r27c
+        add-to-path: true
+
+    - name: Build with NDK
+      run: |
+        # Ищем build.sh в распакованных файлах и запускаем
+        BUILD_SCRIPT=$(find . -name "build.sh" | head -n 1)
+        if [ -z "$BUILD_SCRIPT" ]; then
+          echo "ОШИБКА: build.sh не найден!"
+          exit 1
+        fi
+        
+        DIR=$(dirname "$BUILD_SCRIPT")
+        cd "$DIR"
+        
+        chmod +x build.sh
+        chmod +x scripts/build.sh || true
+        
+        export ANDROID_NDK_HOME=$ANDROID_NDK_HOME
+        ./build.sh
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cheat-lib
+        # Ищем собранный .so файл
+        path: "**/out/arm64-v8a/*.so"
