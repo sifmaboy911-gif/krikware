@@ -11,29 +11,23 @@
 
 // --- ОФФСЕТЫ ИЗ ДАМПА (1.1.0) ---
 namespace off {
-    // Статические поля (RVA в libil2cpp.so)
-    // Если не сработает, будем искать через il2cpp API
-    constexpr uintptr_t player_manager_rva = 0xCD2F9B0; // предположительно ClientWorld/PlayerManager
-    constexpr uintptr_t main_camera_rva = 0xCD2F9B8;    // примерный адрес, нужно уточнить
+    constexpr uintptr_t player_manager_rva = 0xCD2F9B0; 
+    constexpr uintptr_t main_camera_rva = 0xCD2F9B8;    
 
-    // Оффсеты полей внутри классов
     constexpr uintptr_t lazy_instance = 0x0;
     constexpr uintptr_t local_player = 0x40;
-    constexpr uintptr_t player_list_dict = 0x28; // или 0x30, где список всех
+    constexpr uintptr_t player_list_dict = 0x28; 
     constexpr uintptr_t player_biped = 0x30;
     constexpr uintptr_t biped_head = 0x20;
-    constexpr uintptr_t transform_pos = 0x38; // Vector3
+    constexpr uintptr_t transform_pos = 0x38; 
 
-    // Камера
     constexpr uintptr_t camera_component = 0x20;
-    constexpr uintptr_t cam_view_matrix = 0x70; // native offset
+    constexpr uintptr_t cam_view_matrix = 0x70; 
 }
 
-// Простые векторы
 struct Vector3 { float x, y, z; };
 struct Vector2 { float x, y; };
 
-// Глобальные указатели
 static EGLBoolean (*orig_eglSwapBuffers)(EGLDisplay dpy, EGLSurface surf) = nullptr;
 static uintptr_t base_addr = 0;
 static int screen_w = 0, screen_h = 0;
@@ -72,10 +66,7 @@ EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surf) {
 
     if (base_addr) {
         glViewport(0, 0, screen_w, screen_h);
-
-        // --- ПРОБУЕМ ПРОЧИТАТЬ КАМЕРУ И ИГРОКОВ ---
-        // Если игра крашится на этих строчках, значит RVA неверные, и мы будем их искать.
-        // Пока для теста нарисуем квадрат в центре.
+        // Для теста рисуем красный квадрат в центре
         DrawRect(screen_w/2 - 50, screen_h/2 - 50, 100, 100, 1.0f, 0.0f, 0.0f);
     }
 
@@ -101,15 +92,10 @@ void InitGL() {
     glBindAttribLocation(shader_program, 0, "pos");
 }
 
-extern "C" void _() {
+// Единственная функция _, которую мы оставили
+extern "C" __attribute__((visibility("default"))) void _() {
     void* handle = dlopen("libEGL.so", RTLD_LAZY);
     orig_eglSwapBuffers = (EGLBoolean(*)(EGLDisplay, EGLSurface))dlsym(handle, "eglSwapBuffers");
     InitGL();
     LOGI("ZeninESP Loaded! Overlay ready.");
-    
-    // ПРИМЕЧАНИЕ: Чтобы хук реально перехватывал eglSwapBuffers,
-    // нужно использовать DobbyHook или inline-патчинг. 
-    // В лоадере от Komarq (liblauncher) это уже может быть сделано,
-    // но если мы пишем свой модуль с нуля, нужно добавить Dobby в сборку.
-    // Пока для теста мы просто логируем загрузку.
 }
