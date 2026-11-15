@@ -9,18 +9,15 @@
 #define LOG_TAG "ZeninESP"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-// --- ОФФСЕТЫ ИЗ ДАМПА (1.1.0) ---
 namespace off {
     constexpr uintptr_t player_manager_rva = 0xCD2F9B0; 
     constexpr uintptr_t main_camera_rva = 0xCD2F9B8;    
-
     constexpr uintptr_t lazy_instance = 0x0;
     constexpr uintptr_t local_player = 0x40;
     constexpr uintptr_t player_list_dict = 0x28; 
     constexpr uintptr_t player_biped = 0x30;
     constexpr uintptr_t biped_head = 0x20;
     constexpr uintptr_t transform_pos = 0x38; 
-
     constexpr uintptr_t camera_component = 0x20;
     constexpr uintptr_t cam_view_matrix = 0x70; 
 }
@@ -33,7 +30,6 @@ static uintptr_t base_addr = 0;
 static int screen_w = 0, screen_h = 0;
 static GLuint shader_program = 0;
 
-// Простой шейдер для рисования линий
 void DrawRect(float x, float y, float w, float h, float r, float g, float b) {
     GLfloat verts[] = { x, y, x+w, y, x+w, y+h, x, y+h };
     glUseProgram(shader_program);
@@ -66,7 +62,6 @@ EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surf) {
 
     if (base_addr) {
         glViewport(0, 0, screen_w, screen_h);
-        // Для теста рисуем красный квадрат в центре
         DrawRect(screen_w/2 - 50, screen_h/2 - 50, 100, 100, 1.0f, 0.0f, 0.0f);
     }
 
@@ -92,7 +87,6 @@ void InitGL() {
     glBindAttribLocation(shader_program, 0, "pos");
 }
 
-// Единственная функция _, которую мы оставили
 extern "C" __attribute__((visibility("default"))) void _() {
     void* handle = dlopen("libEGL.so", RTLD_LAZY);
     orig_eglSwapBuffers = (EGLBoolean(*)(EGLDisplay, EGLSurface))dlsym(handle, "eglSwapBuffers");
