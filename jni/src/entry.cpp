@@ -3,26 +3,30 @@
 #include <android/log.h>
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
-#include <sys/mman.h>
-#include <unistd.h>
 #include <cmath>
+#include <cstring>
 
 #define LOG_TAG "ZeninESP"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-// --- Оффсеты ---
+// --- ОФФСЕТЫ ИЗ ДАМПА (1.1.0) ---
 namespace off {
-    // Смещение до ClientWorld в libil2cpp (из твоих дампов)
-    constexpr uintptr_t client_world = 0xCD2F9B0;
-    
-    // Смещение до LocalPlayer в PlayerManager
-    constexpr uintptr_t local_player = 0x1234; // ЗАМЕНИ на реальный оффсет
-    
-    // Смещение до списка игроков
-    constexpr uintptr_t player_list = 0x1234;  // ЗАМЕНИ
-    
-    // Смещение до матрицы камеры (View Matrix)
-    constexpr uintptr_t view_matrix = 0x1234;  // ЗАМЕНИ
+    // Статические поля (RVA в libil2cpp.so)
+    // Если не сработает, будем искать через il2cpp API
+    constexpr uintptr_t player_manager_rva = 0xCD2F9B0; // предположительно ClientWorld/PlayerManager
+    constexpr uintptr_t main_camera_rva = 0xCD2F9B8;    // примерный адрес, нужно уточнить
+
+    // Оффсеты полей внутри классов
+    constexpr uintptr_t lazy_instance = 0x0;
+    constexpr uintptr_t local_player = 0x40;
+    constexpr uintptr_t player_list_dict = 0x28; // или 0x30, где список всех
+    constexpr uintptr_t player_biped = 0x30;
+    constexpr uintptr_t biped_head = 0x20;
+    constexpr uintptr_t transform_pos = 0x38; // Vector3
+
+    // Камера
+    constexpr uintptr_t camera_component = 0x20;
+    constexpr uintptr_t cam_view_matrix = 0x70; // native offset
 }
 
 // Простые векторы
@@ -31,22 +35,13 @@ struct Vector2 { float x, y; };
 
 // Глобальные указатели
 static EGLBoolean (*orig_eglSwapBuffers)(EGLDisplay dpy, EGLSurface surf) = nullptr;
-static uintptr_t libil2cpp_base = 0;
-static int screen_w = 0;
-static int screen_h = 0;
+static uintptr_t base_addr = 0;
+static int screen_w = 0, screen_h = 0;
+static GLuint shader_program = 0;
 
 // Простой шейдер для рисования линий
-GLuint shader_program = 0;
-
 void DrawRect(float x, float y, float w, float h, float r, float g, float b) {
-    // Вершины для GL_LINE_LOOP (контур)
-    GLfloat verts[] = {
-        x, y,         // Верхний левый
-        x + w, y,     // Верхний правый
-        x + w, y + h, // Нижний правый
-        x, y + h      // Нижний левый
-    };
-    
+    GLfloat verts[] = { x, y, x+w, y, x+w, y+h, x, y+h };
     glUseProgram(shader_program);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, verts);
@@ -54,44 +49,39 @@ void DrawRect(float x, float y, float w, float h, float r, float g, float b) {
     glDisableVertexAttribArray(0);
 }
 
-bool WorldToScreen(Vector3 world, Vector2& screen, float* matrix) {
-    // Матрица Unity 4x4 (column-major)
-    float w = matrix[3] * world.x + matrix[7] * world.y + matrix[11] * world.z + matrix[15];
+bool WorldToScreen(Vector3 pos, Vector2& screen, float* matrix) {
+    float w = matrix[3]*pos.x + matrix[7]*pos.y + matrix[11]*pos.z + matrix[15];
     if (w < 0.1f) return false;
-    
-    float x = matrix[0] * world.x + matrix[4] * world.y + matrix[8] * world.z + matrix[12];
-    float y = matrix[1] * world.x + matrix[5] * world.y + matrix[9] * world.z + matrix[13];
-    
+    float x = matrix[0]*pos.x + matrix[4]*pos.y + matrix[8]*pos.z + matrix[12];
+    float y = matrix[1]*pos.x + matrix[5]*pos.y + matrix[9]*pos.z + matrix[13];
     screen.x = (screen_w / 2.0f) * (1.0f + x / w);
     screen.y = (screen_h / 2.0f) * (1.0f - y / w);
     return true;
 }
 
 EGLBoolean hooked_eglSwapBuffers(EGLDisplay dpy, EGLSurface surf) {
-    // 1. Получаем разрешение экрана (один раз)
     if (screen_w == 0) {
         eglQuerySurface(dpy, surf, EGL_WIDTH, &screen_w);
         eglQuerySurface(dpy, surf, EGL_HEIGHT, &screen_h);
+        LOGI("Screen: %dx%d", screen_w, screen_h);
     }
-    
-    // 2. Ищем базу libil2cpp
-    if (!libil2cpp_base) {
-        libil2cpp_base = (uintptr_t)dlopen("libil2cpp.so", RTLD_NOW);
+    if (!base_addr) {
+        base_addr = (uintptr_t)dlopen("libil2cpp.so", RTLD_NOW);
+        LOGI("libil2cpp base: %p", (void*)base_addr);
     }
 
-    // 3. Рисуем (если база найдена)
-    if (libil2cpp_base) {
-        // ВНИМАНИЕ: Тут должен быть код поиска игроков по твоим оффсетам.
-        // Пока для теста просто нарисуем красный прямоугольник в центре экрана.
+    if (base_addr) {
         glViewport(0, 0, screen_w, screen_h);
+
+        // --- ПРОБУЕМ ПРОЧИТАТЬ КАМЕРУ И ИГРОКОВ ---
+        // Если игра крашится на этих строчках, значит RVA неверные, и мы будем их искать.
+        // Пока для теста нарисуем квадрат в центре.
         DrawRect(screen_w/2 - 50, screen_h/2 - 50, 100, 100, 1.0f, 0.0f, 0.0f);
     }
-    
-    // 4. Вызываем оригинал, чтобы игра отрисовала кадр
+
     return orig_eglSwapBuffers(dpy, surf);
 }
 
-// Компиляция простого шейдера
 GLuint CompileShader(const char* src, GLenum type) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &src, nullptr);
@@ -102,32 +92,24 @@ GLuint CompileShader(const char* src, GLenum type) {
 void InitGL() {
     const char* vShader = "attribute vec2 pos; void main() { gl_Position = vec4(pos / vec2(1080.0, 2400.0) * 2.0 - 1.0, 0.0, 1.0); }";
     const char* fShader = "precision mediump float; void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }";
-    
     GLuint vs = CompileShader(vShader, GL_VERTEX_SHADER);
     GLuint fs = CompileShader(fShader, GL_FRAGMENT_SHADER);
-    
     shader_program = glCreateProgram();
     glAttachShader(shader_program, vs);
     glAttachShader(shader_program, fs);
     glLinkProgram(shader_program);
-    
     glBindAttribLocation(shader_program, 0, "pos");
 }
 
-// Точка входа для инжектора
 extern "C" void _() {
-    // Находим оригинальный eglSwapBuffers
     void* handle = dlopen("libEGL.so", RTLD_LAZY);
     orig_eglSwapBuffers = (EGLBoolean(*)(EGLDisplay, EGLSurface))dlsym(handle, "eglSwapBuffers");
-    
-    // Инициализируем шейдер
     InitGL();
+    LOGI("ZeninESP Loaded! Overlay ready.");
     
-    // Хукаем через Dobby (или просто патчим память, но Dobby надежнее)
-    // ВНИМАНИЕ: В настоящем проекте тут надо использовать DobbyHook.
-    // Для теста мы просто перезапишем указатель (это не сработает с EGL,
-    // поэтому нужно будет добавить Dobby в сборку).
-    
-    // Пока для теста просто выведем лог, что мы загрузились.
-    LOGI("ZeninESP loaded! Overlay is ready.");
+    // ПРИМЕЧАНИЕ: Чтобы хук реально перехватывал eglSwapBuffers,
+    // нужно использовать DobbyHook или inline-патчинг. 
+    // В лоадере от Komarq (liblauncher) это уже может быть сделано,
+    // но если мы пишем свой модуль с нуля, нужно добавить Dobby в сборку.
+    // Пока для теста мы просто логируем загрузку.
 }
