@@ -27,13 +27,6 @@ jobs:
           exit 1
         fi
         
-        # Патчим entry.cpp для совместимости с инжектором (экспорт _)
-        ENTRY_FILE="jni/src/entry.cpp"
-        if [ -f "$ENTRY_FILE" ]; then
-          echo 'extern "C" __attribute__((visibility("default"))) void _() {}' >> "$ENTRY_FILE"
-          echo "Патч экспорта _ применен."
-        fi
-
         # Запускаем сборку
         $ANDROID_NDK_HOME/ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk NDK_APPLICATION_MK=jni/Application.mk APP_SUPPORT_FLEXIBLE_PAGE_SIZES=true -j4
 
