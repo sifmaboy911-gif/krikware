@@ -1,4 +1,4 @@
-name: Build ASTRA
+name: Build ESP
 
 on:
   push:
@@ -19,44 +19,26 @@ jobs:
         ndk-version: r27c
         add-to-path: true
 
-    - name: Unzip Source
-      run: |
-        # Ищем zip-файл в репозитории
-        ZIP_FILE=$(find . -name "*.zip" | head -n 1)
-        if [ -z "$ZIP_FILE" ]; then
-          echo "ОШИБКА: Zip-архив не найден в репозитории!"
-          exit 1
-        fi
-        echo "Распаковываю $ZIP_FILE..."
-        unzip -q "$ZIP_FILE"
-
     - name: Build with NDK
       run: |
-        # Ищем папку, где лежит jni/Android.mk (это корень проекта)
-        ANDROID_MK=$(find . -name "Android.mk" | grep "jni/Android.mk" | head -n 1)
-        if [ -z "$ANDROID_MK" ]; then
+        # Проверяем, что Android.mk на месте
+        if [ ! -f "jni/Android.mk" ]; then
           echo "ОШИБКА: jni/Android.mk не найден!"
           exit 1
         fi
         
-        # Переходим в корень проекта (на уровень выше папки jni)
-        PROJECT_DIR=$(dirname $(dirname "$ANDROID_MK"))
-        cd "$PROJECT_DIR"
-        echo "Собираю в папке: $PROJECT_DIR"
-        
-        # Патчим entry.cpp для совместимости с инжектором
-        ENTRY_FILE=$(find . -name "entry.cpp" | head -n 1)
-        if [ -n "$ENTRY_FILE" ]; then
+        # Патчим entry.cpp для совместимости с инжектором (экспорт _)
+        ENTRY_FILE="jni/src/entry.cpp"
+        if [ -f "$ENTRY_FILE" ]; then
           echo 'extern "C" __attribute__((visibility("default"))) void _() {}' >> "$ENTRY_FILE"
-          echo "Патч экспорта _ применен к $ENTRY_FILE"
+          echo "Патч экспорта _ применен."
         fi
 
-        # Запускаем сборку напрямую через ndk-build, как просил автор в README
+        # Запускаем сборку
         $ANDROID_NDK_HOME/ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=jni/Android.mk NDK_APPLICATION_MK=jni/Application.mk APP_SUPPORT_FLEXIBLE_PAGE_SIZES=true -j4
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: astra-lib
-        # Забираем все собранные .so файлы из папки libs
+        name: esp-lib
         path: "**/libs/arm64-v8a/*.so"
